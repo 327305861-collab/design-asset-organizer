@@ -1,0 +1,6 @@
+interface:
+  display_name: "Design Asset Organizer"
+  short_description: "分析图片视觉内容并生成统一、可搜索的中文素材文件名"
+  default_prompt: "Use $design-asset-organizer to analyze these images and generate consistent, searchable Chinese filenames."
+policy:
+  allow_implicit_invocation: true
