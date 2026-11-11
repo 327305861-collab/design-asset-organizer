@@ -201,12 +201,14 @@ class DistributionTests(unittest.TestCase):
             with zipfile.ZipFile(ROOT / 'dist/design-asset-organizer.zip') as archive:
                 self.assertTrue(all(n.startswith('design-asset-organizer/') for n in archive.namelist()))
                 self.assertFalse(any('__pycache__' in n for n in archive.namelist()))
+                self.assertEqual(archive.read('design-asset-organizer/LICENSE'), (ROOT / 'LICENSE').read_bytes())
                 archive.extractall(root)
             installer = root / INSTALL.NAME / 'install.py'
             target = root / 'installed' / INSTALL.NAME
             result = subprocess.run([sys.executable, str(installer), '--dest', str(target)],
                                     cwd=root.parent, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((target / 'LICENSE').read_bytes(), (ROOT / 'LICENSE').read_bytes())
             result = subprocess.run([sys.executable, str(target / 'scripts/doctor.py')],
                                     capture_output=True, encoding='utf-8')
             self.assertEqual(result.returncode, 0, result.stderr)

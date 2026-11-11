@@ -1,5 +1,6 @@
 ---
 name: design-asset-organizer
+license: MIT
 description: 为图片素材生成可搜索的中文文件名，或安全批量重命名本地 JPG、JPEG、PNG、WebP 图片。适用于图片命名、素材整理、批量改名；不处理非图片文件。Name image assets in Chinese or safely rename local images.
 ---
 

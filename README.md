@@ -125,3 +125,9 @@ python tools/build_package.py
 ```
 
 生成 `dist/design-asset-organizer.zip`，包含正确的顶层技能目录，不含缓存和用户改名记录。GitHub Actions 配置了 Windows、macOS、Linux 和 Python 3.9/3.12 测试；是否通过，以实际运行记录为准。
+
+## 开源许可证
+
+本项目的代码与文档采用 [MIT License](LICENSE)。任何人均可免费使用、复制、修改、分发及商用；分发时须保留版权声明和许可证全文。软件按现状提供，不附带担保。完整条款以 LICENSE 为准。
+
+打包文件和安装后的 Skill 均保留 LICENSE。用户处理的图片素材、商标及第三方服务的使用权限不由本项目许可证授予。

@@ -10,7 +10,7 @@ import uuid
 from pathlib import Path
 
 NAME = 'design-asset-organizer'
-FILES = ['SKILL.md', 'README.md', 'agents/openai.yaml',
+FILES = ['SKILL.md', 'README.md', 'LICENSE', 'agents/openai.yaml',
          'references/naming-rules.md', 'scripts/apply_rename_plan.py', 'scripts/doctor.py']
 
 

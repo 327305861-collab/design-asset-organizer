@@ -6,7 +6,7 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-FILES = ['SKILL.md', 'README.md', 'install.py', 'agents/openai.yaml',
+FILES = ['SKILL.md', 'README.md', 'LICENSE', 'install.py', 'agents/openai.yaml',
          'references/naming-rules.md', 'scripts/apply_rename_plan.py', 'scripts/doctor.py']
 
 
