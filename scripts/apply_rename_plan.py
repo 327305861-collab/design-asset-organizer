@@ -61,8 +61,10 @@ def validate_filename(name: str) -> None:
         raise PlanError(f"文件名含 Windows 不允许的字符：{name}")
     if name.endswith((" ", ".")):
         raise PlanError(f"文件名不能以空格或句点结尾：{name}")
-    if Path(name).stem.upper() in WINDOWS_RESERVED:
+    if name.split('.')[0].upper() in WINDOWS_RESERVED:
         raise PlanError(f"文件名是 Windows 保留名称：{name}")
+    if len(name.encode('utf-8')) > 255:
+        raise PlanError(f"文件名过长（UTF-8 超过 255 字节）：{name}")
 
 
 def same_path(left: Path, right: Path) -> bool:
@@ -79,13 +81,15 @@ def prepare_plan(items: Iterable[dict[str, str]], base_dir: Path) -> tuple[list[
         source = Path(item["source"]).expanduser()
         if not source.is_absolute():
             source = base_dir / source
+        if source.is_symlink():
+            raise PlanError(f"暂不处理符号链接：{source}")
         source = source.resolve()
         if not source.is_file():
             raise PlanError(f"第 {index} 项源文件不存在：{source}")
         if source.suffix.lower() not in SUPPORTED_EXTENSIONS:
             raise PlanError(f"第 {index} 项不是支持的图片格式：{source.name}")
 
-        target_name = item["target"].strip()
+        target_name = item["target"]
         validate_filename(target_name)
         target_path = Path(target_name)
         if not target_path.suffix:
@@ -107,6 +111,14 @@ def prepare_plan(items: Iterable[dict[str, str]], base_dir: Path) -> tuple[list[
             warnings.append(f"第 {index} 项名称长度为 {len(stem)}，建议 20–45 个字符：{target.name}")
         pairs.append((source, target))
 
+    validate_pairs(pairs)
+    unchanged = sum(source == target for source, target in pairs)
+    if unchanged:
+        warnings.append(f"跳过 {unchanged} 个名称未变化的文件。")
+    return [(source, target) for source, target in pairs if source != target], warnings
+
+
+def validate_pairs(pairs: list[tuple[Path, Path]]) -> None:
     source_keys = [os.path.normcase(str(source)) for source, _ in pairs]
     target_keys = [os.path.normcase(str(target)) for _, target in pairs]
     if len(source_keys) != len(set(source_keys)):
@@ -115,14 +127,21 @@ def prepare_plan(items: Iterable[dict[str, str]], base_dir: Path) -> tuple[list[
         raise PlanError("计划中存在重复的目标文件名。")
 
     source_key_set = set(source_keys)
+    source_aliases: dict[str, list[Path]] = {}
+    for source, _ in pairs:
+        source_aliases.setdefault(str(source).casefold(), []).append(source)
     for source, target in pairs:
-        if same_path(source, target):
-            raise PlanError(f"源文件名与目标文件名相同：{source.name}")
         target_key = os.path.normcase(str(target))
-        if target.exists() and target_key not in source_key_set:
+        # samefile also catches case aliases on case-insensitive macOS volumes.
+        occupied_by_source = target.exists() and any(
+            target.samefile(s) for s in source_aliases.get(str(target).casefold(), [])
+        )
+        if os.path.lexists(target) and target_key not in source_key_set and not occupied_by_source:
             raise PlanError(f"目标文件已存在，拒绝覆盖：{target}")
-
-    return pairs, warnings
+    # Case folding is deliberately conservative for portable plans.
+    folded = [str(target).casefold() for _, target in pairs]
+    if len(folded) != len(set(folded)):
+        raise PlanError("目标名称仅大小写不同，无法保证跨平台安全。")
 
 
 def unique_temp_path(source: Path) -> Path:
@@ -132,24 +151,39 @@ def unique_temp_path(source: Path) -> Path:
             return candidate
 
 
+def move_no_overwrite(source: Path, target: Path) -> None:
+    if os.name == 'nt':
+        source.rename(target)  # Windows rename refuses an existing destination.
+    else:
+        # A hard link reserves the destination atomically without replacing it.
+        os.link(source, target)
+        try:
+            source.unlink()
+        except OSError:
+            target.unlink()
+            raise
+
+
 def apply_pairs(pairs: list[tuple[Path, Path]]) -> None:
+    validate_pairs(pairs)
     staged: list[tuple[Path, Path, Path]] = []
     completed: list[tuple[Path, Path, Path]] = []
     try:
         for source, target in pairs:
             temp = unique_temp_path(source)
-            source.rename(temp)
+            move_no_overwrite(source, temp)
             staged.append((source, temp, target))
         for source, temp, target in staged:
-            temp.rename(target)
+            move_no_overwrite(temp, target)
             completed.append((source, temp, target))
     except Exception:
-        for source, _temp, target in reversed(completed):
-            if target.exists() and not source.exists():
-                target.rename(source)
+        # Free ALL completed targets first: direct target->source breaks cycles.
+        for _source, temp, target in reversed(completed):
+            if target.exists():
+                move_no_overwrite(target, temp)
         for source, temp, _target in reversed(staged):
             if temp.exists() and not source.exists():
-                temp.rename(source)
+                move_no_overwrite(temp, source)
         raise
 
 
@@ -161,33 +195,52 @@ def default_manifest_path(plan_path: Path) -> Path:
     return candidate
 
 
-def write_manifest(path: Path, pairs: list[tuple[Path, Path]]) -> None:
+def write_manifest(path: Path, pairs: list[tuple[Path, Path]], status: str = "applied") -> None:
     payload = {
         "version": 1,
+        "status": status,
         "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "renames": [
             {"source": str(source), "target": str(target)} for source, target in pairs
         ],
     }
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    # Exclusive creation protects an earlier recovery record.
+    with path.open('x', encoding='utf-8') as handle:
+        handle.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+
+
+def set_manifest_status(path: Path, status: str) -> None:
+    payload = load_json(path)
+    payload['status'] = status
+    temporary = path.with_name(path.name + '.' + uuid.uuid4().hex + '.tmp')
+    try:
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def load_rollback_pairs(manifest_path: Path) -> list[tuple[Path, Path]]:
     payload = load_json(manifest_path)
-    if not isinstance(payload, dict) or not isinstance(payload.get("renames"), list):
+    if not isinstance(payload, dict) or not isinstance(payload.get("renames"), list) or not payload['renames']:
         raise PlanError("回退清单缺少 renames 数组。")
+    if payload.get('status', 'applied') != 'applied':
+        raise PlanError("清单未标记为 applied，可能执行中断；请先检查文件位置，再人工恢复。")
     pairs: list[tuple[Path, Path]] = []
     for index, raw in enumerate(payload["renames"], start=1):
         if not isinstance(raw, dict) or not isinstance(raw.get("source"), str) or not isinstance(raw.get("target"), str):
             raise PlanError(f"回退清单第 {index} 项格式错误。")
-        original = Path(raw["source"]).resolve()
-        renamed = Path(raw["target"]).resolve()
+        if not Path(raw['source']).is_absolute() or not Path(raw['target']).is_absolute():
+            raise PlanError("回退清单必须使用绝对路径。")
+        original = Path(raw["source"])
+        renamed = Path(raw["target"])
+        if renamed.is_symlink():
+            raise PlanError(f"暂不处理符号链接：{renamed}")
         if not renamed.is_file():
             raise PlanError(f"回退源文件不存在：{renamed}")
-        if original.exists() and not same_path(original, renamed):
-            raise PlanError(f"原文件名已被占用，拒绝覆盖：{original}")
         pairs.append((renamed, original))
+    validate_pairs(pairs)
     return pairs
 
 
@@ -212,6 +265,9 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            stream.reconfigure(encoding='utf-8')
     args = parse_args()
     try:
         if args.rollback:
@@ -219,7 +275,9 @@ def main() -> int:
             pairs = load_rollback_pairs(manifest_path)
             print_pairs(pairs, "回退预览：" if not args.apply else "正在回退：")
             if args.apply:
+                set_manifest_status(manifest_path, 'rollback_prepared')
                 apply_pairs(pairs)
+                set_manifest_status(manifest_path, 'rolled_back')
                 print("回退完成。")
             else:
                 print("仅预览；添加 --apply 后执行。")
@@ -235,9 +293,16 @@ def main() -> int:
             print("预检通过；添加 --apply 后执行。")
             return 0
 
-        apply_pairs(pairs)
+        if not pairs:
+            print("没有需要改名的文件。")
+            return 0
         manifest_path = (args.manifest or default_manifest_path(plan_path)).resolve()
-        write_manifest(manifest_path, pairs)
+        if any(same_path(manifest_path, p) for pair in pairs for p in pair) or same_path(manifest_path, plan_path):
+            raise PlanError("回退清单不能占用图片或计划文件的路径。")
+        write_manifest(manifest_path, pairs, status='prepared')
+        print(f"恢复清单：{manifest_path}")
+        apply_pairs(pairs)
+        set_manifest_status(manifest_path, 'applied')
         print(f"改名完成。回退清单：{manifest_path}")
         return 0
     except (OSError, PlanError) as exc:

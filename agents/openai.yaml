@@ -1,6 +1,6 @@
 interface:
-  display_name: "Design Asset Organizer"
+  display_name: "图片素材命名 · Design Asset Organizer"
   short_description: "分析图片视觉内容并生成统一、可搜索的中文素材文件名"
-  default_prompt: "Use $design-asset-organizer to analyze these images and generate consistent, searchable Chinese filenames."
+  default_prompt: "使用 $design-asset-organizer 分析这些图片，并按顺序生成统一、可搜索的中文素材文件名。"
 policy:
   allow_implicit_invocation: true

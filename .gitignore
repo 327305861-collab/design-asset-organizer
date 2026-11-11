@@ -3,3 +3,5 @@ __pycache__/
 .DS_Store
 Thumbs.db
 rename-manifest-*.json
+dist/
+*.tmp
