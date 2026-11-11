@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-15-intel]
+        os: [ubuntu-24.04, windows-latest, macos-15-intel]
         python: ['3.9', '3.12']
     runs-on: ${{ matrix.os }}
     steps:
@@ -22,7 +22,7 @@ jobs:
       - run: python scripts/doctor.py
       - run: python tools/build_package.py
       - uses: actions/upload-artifact@v7
-        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+        if: matrix.os == 'ubuntu-24.04' && matrix.python == '3.12'
         with:
           name: design-asset-organizer
           path: dist/*
